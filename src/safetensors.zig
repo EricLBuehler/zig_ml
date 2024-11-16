@@ -68,6 +68,11 @@ pub fn parse_header(header: []u8, allocator: std.mem.Allocator) (std.mem.Allocat
 
     var pos: usize = 0;
     while (splits.next()) |split| {
+        if (std.mem.indexOf(u8, split, "dtype") == null) {
+            pos += split.len + delim.len;
+            continue;
+        }
+
         if (std.mem.lastIndexOf(u8, split, "},\"") != null) {
             const idx = std.mem.lastIndexOf(u8, split, "},\"").?;
             const split_slice = split[0..idx];
@@ -87,7 +92,11 @@ pub fn parse_header(header: []u8, allocator: std.mem.Allocator) (std.mem.Allocat
 
             // Name
             const pos_start = std.mem.lastIndexOf(u8, header[0..pos], "\"").?;
-            const name = header[pos_start - 1 .. pos];
+            var posn = pos_start - 1;
+            while (header[posn] != '\"') {
+                posn -= 1;
+            }
+            const name = header[posn + 1 .. pos];
             const end_quote_pos = std.mem.lastIndexOf(u8, name, "\"").?;
 
             const final_name = try allocator.alloc(u8, end_quote_pos);
@@ -120,7 +129,11 @@ pub fn parse_header(header: []u8, allocator: std.mem.Allocator) (std.mem.Allocat
 
             // Name
             const pos_start = std.mem.lastIndexOf(u8, header[0..pos], "\"").?;
-            const name = header[pos_start - 1 .. pos];
+            var posn = pos_start - 1;
+            while (header[posn] != '\"') {
+                posn -= 1;
+            }
+            const name = header[posn + 1 .. pos];
             const end_quote_pos = std.mem.lastIndexOf(u8, name, "\"").?;
 
             const final_name = try allocator.alloc(u8, end_quote_pos);

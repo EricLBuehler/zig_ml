@@ -29,18 +29,18 @@ fn contiguous_stride(shape: []const usize, allocator: mem.Allocator) Error![]usi
     return stride;
 }
 
-fn recursive_print(comptime T: type, buffer: []T, indices: []const usize, shape: []const usize, strides: []const usize) Error!void {
+fn recursive_write(comptime T: type, buffer: []T, writer: std.ArrayList(u8).Writer, indices: []const usize, shape: []const usize, strides: []const usize) Error!void {
     if (shape.len == indices.len) {
         var offset: usize = 0;
         for (indices, strides) |idx, stride| {
             offset += idx * stride;
         }
-        std.debug.print("{d}", .{buffer[offset]});
+        _ = try writer.print("{d}", .{buffer[offset]});
     } else {
-        std.debug.print("[", .{});
+        _ = try writer.print("[", .{});
         for (0..shape[indices.len]) |i| {
             if (i > 0) {
-                std.debug.print(",", .{});
+                _ = try writer.print(",", .{});
             }
 
             var allocator = std.heap.page_allocator;
@@ -53,9 +53,9 @@ fn recursive_print(comptime T: type, buffer: []T, indices: []const usize, shape:
                 idx += 1;
             }
             new_indices[idx] = i;
-            try recursive_print(T, buffer, new_indices, shape, strides);
+            try recursive_write(T, buffer, writer, new_indices, shape, strides);
         }
-        std.debug.print("]", .{});
+        _ = try writer.print("]", .{});
     }
     return;
 }
@@ -264,7 +264,6 @@ pub fn Tensor(
                     shape_cpy[i] = @as(usize, @intCast(new_dim));
                 }
             }
-            std.debug.print("shape cpy {any}\n", .{shape_cpy});
             if (self.numel() != numel_shape(shape_cpy)) {
                 return error.NumelMismatch;
             }
@@ -743,9 +742,9 @@ pub fn Tensor(
         // ================================================================================
 
         /// Sum the tensor in certain dimensions. Each dimension is replaced by a 1.
-        /// 
+        ///
         /// Note: The dimensions must be in increasing order.
-        /// 
+        ///
         /// ## Semantics
         /// - `dims` are not consumed.
         pub fn sum(self: *const Tensor(T), dims: []const usize) Error!Tensor(T) {
@@ -770,9 +769,9 @@ pub fn Tensor(
         }
 
         /// Mean of the tensor in certain dimensions. Each dimension is replaced by a 1.
-        /// 
+        ///
         /// Note: The dimensions must be in increasing order.
-        /// 
+        ///
         /// ## Semantics
         /// - `dims` are not consumed.
         pub fn mean(self: *const Tensor(T), dims: []const usize) Error!Tensor(T) {
@@ -785,14 +784,51 @@ pub fn Tensor(
             return summed.div_scalar(scale);
         }
 
+        /// Sum of the tensor in all certain dimensions. This returns a tensor of shape [1].
+        ///
+        /// ## Semantics
+        /// - `dims` are not consumed.
+        pub fn sum_all(self: *const Tensor(T)) Error!Tensor(T) {
+            const dims = try self.allocator.alloc(usize, self.shape.len);
+            defer self.allocator.free(dims);
+            for (0..self.shape.len) |i| {
+                dims[i] = i;
+            }
+            return self.sum(dims);
+        }
+
+        /// Mean of the tensor in all certain dimensions. This returns a tensor of shape [1].
+        ///
+        /// ## Semantics
+        /// - `dims` are not consumed.
+        pub fn mean_all(self: *const Tensor(T)) Error!Tensor(T) {
+            const summed = try self.sum_all();
+            const scale = if (@typeInfo(T) == .Float) @as(T, @floatFromInt(self.numel())) else @as(T, @intCast(self.numel()));
+            return summed.div_scalar(scale);
+        }
+
         // ================================================================================
         // UTILITIES
         // ================================================================================
 
-        pub fn debug(self: *const Tensor(T)) Error!void {
-            std.debug.print("Tensor(", .{});
-            try recursive_print(T, self.data, &.{}, self.shape, self.stride);
-            std.debug.print(")\n", .{});
+        /// Return a string debug representation.
+        ///
+        /// ## Semantics
+        /// - The caller is responsible for deallocating the memory.
+        pub fn debug(self: *const Tensor(T)) Error!std.ArrayList(u8) {
+            var arrlist = std.ArrayList(u8).init(self.allocator);
+            var writer = arrlist.writer();
+            _ = try writer.write("Tensor(");
+            try recursive_write(T, self.data, writer, &.{}, self.shape, self.stride);
+            _ = try writer.write(")\n");
+            return arrlist;
+        }
+
+        /// Print a debug representation.
+        pub fn print(self: *const Tensor(T)) Error!void {
+            const repr = try self.debug();
+            defer repr.deinit();
+            std.debug.print("{s}", .{repr.items});
             return;
         }
     };

@@ -12,7 +12,7 @@ fn make_randn(seed: u64) f32 {
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
-    const bytes = try safetensors.read_bytes("test.safetensors", allocator);
+    const bytes = try safetensors.read_bytes("model-00001-of-00002.safetensors", allocator);
     defer allocator.free(bytes);
     const header_slice = safetensors.get_header_slice(bytes);
     const header: []u8 = header_slice[0];
@@ -24,6 +24,7 @@ pub fn main() !void {
         defer item.deinit();
         const tensor_data = bytes[item.data_offsets[0] + data_offset .. item.data_offsets[1] + data_offset];
         if (!std.mem.eql(u8, item.dtype, "F32")) {
+            std.debug.print("ERROR: unsupported dtype `{s}`.\n", .{item.dtype});
             std.debug.assert(false);
         }
         const ty = f32;
@@ -32,8 +33,11 @@ pub fn main() !void {
         @memcpy(new_data, float_data);
         const x = try tensor.Tensor(ty).from_slice(item.shape, new_data, allocator);
         defer x.deinit();
-        std.debug.print("{s}: ", .{item.name});
-        try x.debug();
+
+        const mean = try x.mean_all();
+        const repr = try mean.debug();
+        defer repr.deinit();
+        std.debug.print("{s}: {any}, mean = {s}\n", .{ item.name, x.shape, repr.items });
     }
 
     std.debug.print("\n\n\n", .{});
@@ -49,7 +53,7 @@ pub fn main() !void {
     a = try a.mean(&.{ 0, 1, 2 });
     a = try a.view(&.{-1});
 
-    try a.debug();
+    try a.print();
 
     // var b = try tensor.Tensor(f32).arange(0, N * N, allocator);
     // defer b.deinit();
@@ -65,11 +69,11 @@ pub fn main() !void {
 
     // std.debug.print("a: ", .{});
     // std.debug.print("{any}\n", .{a.shape});
-    // // try a.debug();
+    // // try a.print();
     // std.debug.print("b: ", .{});
     // std.debug.print("{any}\n", .{b.shape});
-    // // try b.debug();
+    // // try b.print();
     // std.debug.print("c1: ", .{});
     // std.debug.print("{any}\n", .{c1.shape});
-    // // try c1.debug();
+    // // try c1.print();
 }
