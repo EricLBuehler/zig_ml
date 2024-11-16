@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const tensor = @import("tensor.zig");
+const safetensors = @import("safetensors.zig");
 
 // Return a random number from 0 to given `max`
 fn make_randn(seed: u64) f32 {
@@ -11,6 +12,32 @@ fn make_randn(seed: u64) f32 {
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
+    const bytes = try safetensors.read_bytes("test.safetensors", allocator);
+    defer allocator.free(bytes);
+    const header_slice = safetensors.get_header_slice(bytes);
+    const header: []u8 = header_slice[0];
+    const data_offset: u64 = header_slice[1];
+
+    const parsed_header = try safetensors.parse_header(header, allocator);
+    defer parsed_header.deinit();
+    for (parsed_header.items) |item| {
+        defer item.deinit();
+        const tensor_data = bytes[item.data_offsets[0] + data_offset .. item.data_offsets[1] + data_offset];
+        if (!std.mem.eql(u8, item.dtype, "F32")) {
+            std.debug.assert(false);
+        }
+        const ty = f32;
+        const float_data = std.mem.bytesAsSlice(ty, @as([]align(@alignOf(ty)) u8, @alignCast(tensor_data)));
+        const new_data = try allocator.alloc(ty, float_data.len);
+        @memcpy(new_data, float_data);
+        const x = try tensor.Tensor(ty).from_slice(item.shape, new_data, allocator);
+        defer x.deinit();
+        std.debug.print("{s}: ", .{item.name});
+        try x.debug();
+    }
+
+    std.debug.print("\n\n\n", .{});
+
     const N: usize = 2;
 
     var a = try tensor.Tensor(f32).arange(0, 3 * N * N, allocator);
@@ -20,7 +47,7 @@ pub fn main() !void {
     a = try a.view(&.{ 3, N, N });
 
     a = try a.mean(&.{ 0, 1, 2 });
-    a = try a.view(&.{ -1 });
+    a = try a.view(&.{-1});
 
     try a.debug();
 
