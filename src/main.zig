@@ -11,33 +11,38 @@ fn make_randn(seed: u64) f32 {
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
-    const N: usize = 512;
+    const N: usize = 2;
 
-    var a = try tensor.Tensor(f32).arange(0, N * N, allocator);
+    var a = try tensor.Tensor(f32).arange(0, 3 * N * N, allocator);
     defer a.deinit();
 
     a = try a.div_scalar(@floatFromInt(a.numel()));
-    a = try a.view(&.{ N, N });
+    a = try a.view(&.{ 3, N, N });
 
-    var b = try tensor.Tensor(f32).arange(0, N * N, allocator);
-    defer b.deinit();
+    a = try a.mean(&.{ 0, 1, 2 });
+    a = try a.view(&.{ -1 });
 
-    b = try b.div_scalar(@floatFromInt(b.numel()));
-    b = try b.view(&.{ N, N });
-    b = try b.t();
+    try a.debug();
 
-    const start1 = try std.time.Instant.now();
-    const c1 = try a.matmul(&b);
-    const ns_duration1 = @as(f32, @floatFromInt((try std.time.Instant.now()).since(start1))) / @as(f32, @floatFromInt(std.time.ns_per_ms));
-    std.debug.print("matmul took {}ms\n", .{ns_duration1});
+    // var b = try tensor.Tensor(f32).arange(0, N * N, allocator);
+    // defer b.deinit();
 
-    std.debug.print("a: ", .{});
-    std.debug.print("{any}\n", .{a.shape});
-    // try a.debug();
-    std.debug.print("b: ", .{});
-    std.debug.print("{any}\n", .{b.shape});
-    // try b.debug();
-    std.debug.print("c1: ", .{});
-    std.debug.print("{any}\n", .{c1.shape});
-    // try c1.debug();
+    // b = try b.div_scalar(@floatFromInt(b.numel()));
+    // b = try b.view(&.{ N, N });
+    // b = try b.t();
+
+    // const start1 = try std.time.Instant.now();
+    // const c1 = try a.matmul(&b);
+    // const ns_duration1 = @as(f32, @floatFromInt((try std.time.Instant.now()).since(start1))) / @as(f32, @floatFromInt(std.time.ns_per_ms));
+    // std.debug.print("matmul took {}ms\n", .{ns_duration1});
+
+    // std.debug.print("a: ", .{});
+    // std.debug.print("{any}\n", .{a.shape});
+    // // try a.debug();
+    // std.debug.print("b: ", .{});
+    // std.debug.print("{any}\n", .{b.shape});
+    // // try b.debug();
+    // std.debug.print("c1: ", .{});
+    // std.debug.print("{any}\n", .{c1.shape});
+    // // try c1.debug();
 }

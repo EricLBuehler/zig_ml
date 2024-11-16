@@ -11,6 +11,7 @@ pub const Error = error{
     MatmulBatchMismatch,
     MatmulInnerMismatch,
     InvalidDataLength,
+    InvalidDim,
 };
 
 fn contiguous_stride(shape: []const usize, allocator: mem.Allocator) Error![]usize {
@@ -223,16 +224,50 @@ pub fn Tensor(
             return true;
         }
 
-        /// Reshape this tensor. A view is returned.
+        /// Reshape this tensor. A view is returned. At most one dimension may be -1, this infers the dimension.
+        ///
+        /// ## Errors
+        /// - `NumelMismatch`: number of elements do not match.
+        /// - `InvalidDim`: multiple -1 or 0s encountered in new shape.
         ///
         /// ## Semantics
         /// - `shape` is not consumed and a copy is made.
-        pub fn view(self: *const Tensor(T), shape: []const usize) Error!Tensor(T) {
-            if (self.numel() != numel_shape(shape)) {
+        pub fn view(self: *const Tensor(T), shape: []const i64) Error!Tensor(T) {
+            var num_infer: usize = 0;
+            var infer_dim: usize = 0;
+            for (shape, 0..) |dim, i| {
+                if (dim == -1) {
+                    num_infer += 1;
+                    infer_dim = i;
+                } else if (dim == 0) {
+                    return error.InvalidDim;
+                }
+            }
+            if (num_infer > 1) {
+                return error.InvalidDim;
+            }
+
+            const shape_cpy = try self.allocator.alloc(usize, shape.len);
+
+            if (num_infer > 0) {
+                var other_dims: i64 = 1;
+                for (shape, 0..) |dim, i| {
+                    if (i != infer_dim) {
+                        other_dims *= dim;
+                    }
+                }
+                const inferred_dim = self.numel() / @as(usize, @intCast(other_dims));
+                shape_cpy[infer_dim] = inferred_dim;
+            }
+            for (shape, 0..) |new_dim, i| {
+                if (i != infer_dim or num_infer == 0) {
+                    shape_cpy[i] = @as(usize, @intCast(new_dim));
+                }
+            }
+            std.debug.print("shape cpy {any}\n", .{shape_cpy});
+            if (self.numel() != numel_shape(shape_cpy)) {
                 return error.NumelMismatch;
             }
-            const shape_cpy = try self.allocator.alloc(usize, shape.len);
-            @memcpy(shape_cpy, shape);
             const stride = try contiguous_stride(shape_cpy, self.allocator);
             return Tensor(T){ .stride = stride, .shape = shape_cpy, .data = self.data, .allocator = self.allocator, .is_view = true };
         }
@@ -701,6 +736,53 @@ pub fn Tensor(
             const stride_cpy = try self.allocator.alloc(usize, self.stride.len);
             @memcpy(stride_cpy, self.stride);
             return Tensor(T){ .stride = stride_cpy, .shape = shape_cpy, .data = arr, .allocator = self.allocator, .is_view = false };
+        }
+
+        // ================================================================================
+        // REDUCTION OPERATORS (Tensor)
+        // ================================================================================
+
+        /// Sum the tensor in certain dimensions. Each dimension is replaced by a 1.
+        /// 
+        /// Note: The dimensions must be in increasing order.
+        /// 
+        /// ## Semantics
+        /// - `dims` are not consumed.
+        pub fn sum(self: *const Tensor(T), dims: []const usize) Error!Tensor(T) {
+            var shape_cpy = try self.allocator.alloc(usize, self.shape.len);
+            @memcpy(shape_cpy, self.shape);
+            for (dims) |dim| {
+                shape_cpy[dim] = 1;
+            }
+            const new_stride = try contiguous_stride(shape_cpy, self.allocator);
+
+            const dst = try self.allocator.alloc(T, numel_shape(shape_cpy));
+            for (self.data, 0..) |src, unstr_idx| {
+                var dst_index = unstr_idx;
+                for (dims) |dim| {
+                    const pre = dst_index / self.stride[dim];
+                    const post = dst_index % self.stride[dim];
+                    dst_index = (pre / self.shape[dim]) * self.stride[dim] + post;
+                }
+                dst[dst_index] += src;
+            }
+            return Tensor(T){ .stride = new_stride, .shape = shape_cpy, .data = dst, .allocator = self.allocator, .is_view = false };
+        }
+
+        /// Mean of the tensor in certain dimensions. Each dimension is replaced by a 1.
+        /// 
+        /// Note: The dimensions must be in increasing order.
+        /// 
+        /// ## Semantics
+        /// - `dims` are not consumed.
+        pub fn mean(self: *const Tensor(T), dims: []const usize) Error!Tensor(T) {
+            const summed = try self.sum(dims);
+            var numel_dims: usize = 1;
+            for (dims) |dim| {
+                numel_dims *= self.shape[dim];
+            }
+            const scale = if (@typeInfo(T) == .Float) @as(T, @floatFromInt(numel_dims)) else @as(T, @intCast(numel_dims));
+            return summed.div_scalar(scale);
         }
 
         // ================================================================================
