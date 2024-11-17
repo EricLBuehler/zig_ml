@@ -1,9 +1,11 @@
 const std = @import("std");
 
+const tensor = @import("tensor.zig");
+
 /// ## Semantics
 /// - `path` is not consumed
 /// - The returned data must be freed by the caller
-pub fn read_bytes(path: []const u8, allocator: std.mem.Allocator) (std.fs.File.ReadError || std.fs.File.OpenError || std.fs.File.SeekError || std.mem.Allocator.Error)![]u8 {
+fn read_bytes(path: []const u8, allocator: std.mem.Allocator) ![]u8 {
     const file = try std.fs.cwd().createFile(
         path,
         .{ .read = true, .truncate = false },
@@ -24,7 +26,7 @@ pub fn read_bytes(path: []const u8, allocator: std.mem.Allocator) (std.fs.File.R
 /// ## Semantics
 /// - `ct` is not consumed
 /// - The returned data is a slice of ct
-pub fn get_header_slice(ct: []u8) struct { []u8, u64 } {
+fn get_header_slice(ct: []u8) struct { []u8, u64 } {
     var length: u64 = 0;
     for (0..8) |index| {
         length |= (@as(u64, ct[index])) << (@as(u6, @intCast(index)) * @as(u6, 8));
@@ -55,7 +57,7 @@ const SafetensorsTensorMeta = struct {
 /// - `header` is not consumed
 /// - The returned ArrayList must be freed with `.deinit`!
 /// - The nested elements (`SafetensorsTensorMeta`) must each also have `.deinit` called!
-pub fn parse_header(header: []u8, allocator: std.mem.Allocator) (std.mem.Allocator.Error || std.fmt.BufPrintError || error{JsonParseError})!std.ArrayList(SafetensorsTensorMeta) {
+fn parse_header(header: []u8, allocator: std.mem.Allocator) !std.ArrayList(SafetensorsTensorMeta) {
     const delim = "\":{";
     var splits = std.mem.split(u8, header, delim);
     var accum_metadata = std.ArrayList(SafetensorsTensorMeta).init(allocator);
@@ -154,7 +156,7 @@ pub fn parse_header(header: []u8, allocator: std.mem.Allocator) (std.mem.Allocat
     return accum_metadata;
 }
 
-pub fn get_dtype(dtype: []const u8) error{UnknownDtype}!type {
+fn get_dtype(dtype: []const u8) error{UnknownDtype}!type {
     if (std.mem.eql(u8, dtype, "BOOL")) {
         return bool;
     } else if (std.mem.eql(u8, dtype, "U8")) {
@@ -180,4 +182,41 @@ pub fn get_dtype(dtype: []const u8) error{UnknownDtype}!type {
     } else {
         return error.UnknownDtype;
     }
+}
+
+/// Load tensors with names.
+///
+/// ## Semantics
+/// - `path` is not consumed
+/// - The returned ArrayList must be freed with `.deinit`!
+/// - The nested tensors (`tensor.Tensor`) must each also have `.deinit` called!
+pub fn load_tensors(comptime T: type, path: []const u8, allocator: std.mem.Allocator) !std.StringHashMap(tensor.Tensor(T)) {
+    const bytes = try read_bytes(path, allocator);
+    defer allocator.free(bytes);
+    const header_slice = get_header_slice(bytes);
+    const header: []u8 = header_slice[0];
+    const data_offset: u64 = header_slice[1];
+
+    const parsed_header = try parse_header(header, allocator);
+    defer parsed_header.deinit();
+
+    var accum = std.StringHashMap(tensor.Tensor(T)).init(allocator);
+    for (parsed_header.items) |item| {
+        defer item.deinit();
+        const tensor_data = bytes[item.data_offsets[0] + data_offset .. item.data_offsets[1] + data_offset];
+        if (!std.mem.eql(u8, item.dtype, "F32")) {
+            std.debug.print("ERROR: unsupported dtype `{s}`.\n", .{item.dtype});
+            std.debug.assert(false);
+        }
+        const ty = f32;
+        const float_data = std.mem.bytesAsSlice(ty, @as([]align(@alignOf(ty)) u8, @alignCast(tensor_data)));
+        const new_data = try allocator.alloc(ty, float_data.len);
+        @memcpy(new_data, float_data);
+        const name_cpy = try allocator.alloc(u8, item.name.len);
+        @memcpy(name_cpy, item.name);
+        const x = try tensor.Tensor(ty).from_slice(item.shape, new_data, allocator);
+        try accum.put(name_cpy, x);
+    }
+
+    return accum;
 }

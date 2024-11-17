@@ -12,32 +12,19 @@ fn make_randn(seed: u64) f32 {
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
-    const bytes = try safetensors.read_bytes("model-00001-of-00002.safetensors", allocator);
-    defer allocator.free(bytes);
-    const header_slice = safetensors.get_header_slice(bytes);
-    const header: []u8 = header_slice[0];
-    const data_offset: u64 = header_slice[1];
-
-    const parsed_header = try safetensors.parse_header(header, allocator);
-    defer parsed_header.deinit();
-    for (parsed_header.items) |item| {
-        defer item.deinit();
-        const tensor_data = bytes[item.data_offsets[0] + data_offset .. item.data_offsets[1] + data_offset];
-        if (!std.mem.eql(u8, item.dtype, "F32")) {
-            std.debug.print("ERROR: unsupported dtype `{s}`.\n", .{item.dtype});
-            std.debug.assert(false);
-        }
-        const ty = f32;
-        const float_data = std.mem.bytesAsSlice(ty, @as([]align(@alignOf(ty)) u8, @alignCast(tensor_data)));
-        const new_data = try allocator.alloc(ty, float_data.len);
-        @memcpy(new_data, float_data);
-        const x = try tensor.Tensor(ty).from_slice(item.shape, new_data, allocator);
+    var tensors = try safetensors.load_tensors(f32, "model-00001-of-00002.safetensors", allocator);
+    defer tensors.deinit();
+    var iterator = tensors.iterator();
+    while (iterator.next()) |entry| {
+        const name = entry.key_ptr;
+        const x = entry.value_ptr;
         defer x.deinit();
+        defer allocator.free(name.*);
 
         const mean = try x.mean_all();
         const repr = try mean.debug();
         defer repr.deinit();
-        std.debug.print("{s}: {any}, mean = {s}\n", .{ item.name, x.shape, repr.items });
+        std.debug.print("{s}: {any}, mean = {s}\n", .{ name.*, x.shape, repr.items });
     }
 
     std.debug.print("\n\n\n", .{});
